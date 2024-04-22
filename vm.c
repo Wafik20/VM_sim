@@ -6,6 +6,7 @@
 #define PAGE_SIZE 2048        // 2kb page size
 #define ADDRESS_SIZE 32       // 32 bit virtual address
 #define TABLE_ENTRIES 2097152 // 2^21 pages
+#define INT_MAX 2147483647
 
 // Global variables
 int num_of_frames = 0; // This will be set from command line
@@ -17,8 +18,10 @@ static int page_faults = 0;
 static int writes = 0;
 static int total_accesses = 0;
 
+// Track of how many frames have been allocated so far
 static int frames_allocated = 0;
 
+// Structs to hold the page table entry
 struct page_table_entry
 {
     int valid;
@@ -31,6 +34,234 @@ struct tuple
     char instruction_type;
     __uint32_t add;
 };
+
+// OPT list
+// begin implementation
+// Define the two dimentional list
+struct access
+{
+    int line_num;
+    struct access *next;
+};
+
+struct page_list_opt
+{
+    int page_num;
+    struct page_list_opt *next;
+    struct access *head;
+};
+
+struct page_list_opt *create_page_list_node(int page_num)
+{
+    struct page_list_opt *node = (struct page_list_opt *)malloc(sizeof(struct page_list_opt));
+    if (!node)
+    {
+        perror("Failed to allocate memory for page list node");
+        exit(EXIT_FAILURE);
+    }
+    node->page_num = page_num;
+    node->next = NULL;
+    node->head = NULL;
+    return node;
+}
+
+void add_access(struct page_list_opt *page_node, int line_num)
+{
+    struct access *new_access = (struct access *)malloc(sizeof(struct access));
+    if (!new_access)
+    {
+        perror("Failed to allocate memory for access");
+        exit(EXIT_FAILURE);
+    }
+    new_access->line_num = line_num;
+    new_access->next = page_node->head;
+    page_node->head = new_access;
+}
+
+struct page_list_opt *find_or_add_page(struct page_list_opt **root, int page_num)
+{
+    struct page_list_opt *current = *root;
+    struct page_list_opt *last = NULL;
+
+    // Search for the page or the last node in the list
+    while (current != NULL && current->page_num != page_num)
+    {
+        last = current;
+        current = current->next;
+    }
+
+    // If the page was found
+    if (current != NULL)
+    {
+        return current;
+    }
+
+    // Page not found, create a new node
+    struct page_list_opt *new_node = create_page_list_node(page_num);
+    if (last == NULL)
+    { // This means the list was empty
+        *root = new_node;
+    }
+    else
+    {
+        last->next = new_node;
+    }
+    return new_node;
+}
+
+// Function to find a page in the list
+struct page_list_opt *find_page(struct page_list_opt *root, int page_num)
+{
+    struct page_list_opt *current = root;
+
+    // Search for the page
+    while (current != NULL)
+    {
+        if (current->page_num == page_num)
+        {
+            return current; // Page found
+        }
+        current = current->next;
+    }
+
+    return NULL; // Page not found
+}
+
+void free_all(struct page_list_opt *root)
+{
+    while (root != NULL)
+    {
+        struct page_list_opt *temp = root;
+        root = root->next;
+
+        struct access *acc = temp->head;
+        while (acc != NULL)
+        {
+            struct access *acc_temp = acc;
+            acc = acc->next;
+            free(acc_temp);
+        }
+
+        free(temp);
+    }
+}
+
+void print_opt_list(struct page_list_opt *root)
+{
+    struct page_list_opt *current = root;
+    // if list is empty, print empty and return
+    if (current == NULL)
+    {
+        printf("List is empty.\n");
+        return;
+    }
+
+    while (current != NULL)
+    {
+        printf("Page number: %d\n", current->page_num);
+        struct access *acc = current->head;
+        while (acc != NULL)
+        {
+            printf("Line number: %d\n", acc->line_num);
+            acc = acc->next;
+        }
+        current = current->next;
+    }
+}
+
+// Given a page number and current line number, return the line with closest distance to the current line number in the future
+int get_closest_use_of_page(int page_num, int curr_line_num, struct page_list_opt *root)
+{
+    struct page_list_opt *target = find_page(root, page_num);
+    if (target == NULL)
+    {
+        return -1; // Page not found, return an error code or handle it as appropriate
+    }
+
+    struct access *acc = target->head;
+    int closest = INT_MAX; // Use INT_MAX to signify no future access is found
+
+    // Loop over the accesses and find the closest one to curr_line_num
+    while (acc != NULL)
+    {
+        if (acc->line_num > curr_line_num && acc->line_num < closest)
+        {
+            closest = acc->line_num;
+        }
+        acc = acc->next;
+    }
+
+    return closest == INT_MAX ? -1 : closest; // If no access is closer, return -1 or another indicator
+}
+
+// Function to get the page with the farthest first future use
+int get_page_with_farthest_next_use(struct page_list_opt *root, int line_num)
+{
+    struct page_list_opt *current = root;
+    int farthest = -1;      // Initialize to -1 to indicate no future use has been found yet
+    int farthest_page = -1; // This will store the page number with the farthest future use
+
+    while (current != NULL)
+    {
+        int first_future_use = get_closest_use_of_page(current->page_num, line_num, root);
+        if (first_future_use > farthest)
+        {
+            farthest = first_future_use;
+            farthest_page = current->page_num;
+        }
+        current = current->next;
+    }
+
+    return farthest_page; // Return the page number with the farthest future use, or -1 if none is found
+}
+
+// remove a page from the list
+void remove_page(struct page_list_opt **root, int page_num)
+{
+    if (root == NULL || *root == NULL)
+    {
+        return; // List is empty or NULL pointer provided
+    }
+
+    struct page_list_opt *current = *root;
+    struct page_list_opt *previous = NULL;
+
+    // Find the page and keep track of the previous node
+    while (current != NULL && current->page_num != page_num)
+    {
+        previous = current;
+        current = current->next;
+    }
+
+    if (current == NULL)
+    {
+        return; // Page not found
+    }
+
+    // If the page is the first node in the list
+    if (previous == NULL)
+    {
+        *root = current->next; // Update root to be the next node
+    }
+    else
+    {
+        previous->next = current->next; // Bypass the current node
+    }
+
+    // Free the associated accesses
+    struct access *acc = current->head;
+    while (acc != NULL)
+    {
+        struct access *next = acc->next;
+        free(acc);
+        acc = next;
+    }
+
+    // Free the page node itself
+    free(current);
+}
+
+// end implementation
 
 // Circular linked list implementation
 // begin implementation
@@ -106,6 +337,8 @@ void display_list(struct page_list *list)
 
 // Declare a list for the clock algorithm
 struct page_list clock_list;
+struct page_list_opt *opt_list = NULL;
+
 // end implementation
 
 static struct page_table_entry page_table[TABLE_ENTRIES];
@@ -234,10 +467,16 @@ int nru(int line_num)
     return -1;
 }
 
-int opt()
+int opt(int line_num, int page_num)
 {
-    printf("Optimal algorithm\n");
-    return 0;
+    int farthest_page = get_page_with_farthest_next_use(opt_list, line_num);
+    if (farthest_page == -1)
+    {
+        perror("Failed to find a page with farthest next use");
+        return -1;
+    }
+
+    return farthest_page;
 }
 
 int clock()
@@ -275,6 +514,29 @@ int clock()
     return -1;
 }
 
+void init_opt_list(struct page_list_opt **opt_list, FILE *trace_file)
+{
+    char line[128];
+    int line_num = 0;
+    struct page_list_opt *page_node;
+
+    // Read each line from the trace file
+    while (fgets(line, sizeof(line), trace_file) != NULL)
+    {
+        struct tuple mem_access = sanitize_trace_line(line);
+        int page_number = get_page_number(mem_access.add);
+
+        // Find or create a new page list node for the current page number
+        page_node = find_or_add_page(opt_list, page_number);
+        add_access(page_node, line_num);
+
+        line_num++; // Increment line number for the next read
+    }
+
+    // Reset the file pointer to the beginning of the file for future use
+    rewind(trace_file);
+}
+
 void process_trace_file(FILE *f)
 {
     if (f == NULL)
@@ -289,11 +551,21 @@ void process_trace_file(FILE *f)
     {
         // Sanitize the trace line by line
         struct tuple mem_access = sanitize_trace_line(line);
-        total_accesses++;
 
         // Get the intruction type and address
         char instruction_type = mem_access.instruction_type;
         __uint32_t address = mem_access.add;
+
+        if (instruction_type == 'M')
+        {
+            total_accesses += 2;
+        }
+        else
+        {
+            total_accesses++;
+        } 
+
+        printf("\n\n\n total_access so far: %d\n", total_accesses);
 
         // Compute page number and offset
         int page_number = get_page_number(address);
@@ -342,7 +614,12 @@ void process_trace_file(FILE *f)
                 if (strcmp(algorithm, "opt") == 0)
                 {
                     // Optimal algorithm
-                    to_be_evicted = opt();
+                    to_be_evicted = opt(line_num, page_number);
+                    if (to_be_evicted == -1)
+                    {
+                        perror("Optimal algorithm failed to find a frame to evict");
+                        return;
+                    }
                 }
                 else if (strcmp(algorithm, "nru") == 0)
                 {
@@ -354,7 +631,6 @@ void process_trace_file(FILE *f)
                     to_be_evicted = clock();
 
                     // Remove the page from the clock list
-
                 }
                 else
                 {
@@ -415,68 +691,54 @@ void print_stats(char *algorithm)
     printf("Writes: %d\n", writes);
 }
 
-void print_usage() {
+void print_usage()
+{
     printf("Usage: vmsim -n <numframes> -a <opt|clock|nru> [-r <refresh>] <tracefile>\n");
 }
 
-// int main(int argc, char *argv[])
-// {
-//     clock_list.head = NULL;
-
-//     if (argc < 4)
-//     {
-//         perror("Usage: ./vm num_of_frames algorithm refresh_rate");
-//         return 1;
-//     }
-
-//     num_of_frames = atoi(argv[1]);
-//     algorithm = argv[2];
-//     refresh_rate = atoi(argv[3]);
-
-//     FILE *f = fopen("trace.txt", "r");
-//     process_trace_file(f);
-//     print_stats(algorithm);
-//     fclose(f);
-
-//     return 0;
-// }
-
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
     int opt;
     extern char *optarg;
     extern int optind;
     int n_flag = 0, a_flag = 0, r_flag = 0;
     char *tracefile = NULL;
+    clock_list.head = NULL;
 
-    while ((opt = getopt(argc, argv, "n:a:r:")) != -1) {
-        switch (opt) {
-            case 'n':
-                num_of_frames = atoi(optarg);
-                if (num_of_frames <= 0) {
-                    fprintf(stderr, "Invalid number of frames: Must be greater than zero.\n");
-                    return EXIT_FAILURE;
-                }
-                n_flag = 1;
-                break;
-            case 'a':
-                algorithm = optarg;
-                a_flag = 1;
-                break;
-            case 'r':
-                refresh_rate = atoi(optarg);
-                if (refresh_rate <= 0) {
-                    fprintf(stderr, "Invalid refresh rate: Must be greater than zero.\n");
-                    return EXIT_FAILURE;
-                }
-                r_flag = 1;
-                break;
-            case '?':
-                print_usage();
+    while ((opt = getopt(argc, argv, "n:a:r:")) != -1)
+    {
+        switch (opt)
+        {
+        case 'n':
+            num_of_frames = atoi(optarg);
+            if (num_of_frames <= 0)
+            {
+                fprintf(stderr, "Invalid number of frames: Must be greater than zero.\n");
                 return EXIT_FAILURE;
+            }
+            n_flag = 1;
+            break;
+        case 'a':
+            algorithm = optarg;
+            a_flag = 1;
+            break;
+        case 'r':
+            refresh_rate = atoi(optarg);
+            if (refresh_rate <= 0)
+            {
+                fprintf(stderr, "Invalid refresh rate: Must be greater than zero.\n");
+                return EXIT_FAILURE;
+            }
+            r_flag = 1;
+            break;
+        case '?':
+            print_usage();
+            return EXIT_FAILURE;
         }
     }
 
-    if (optind >= argc) {
+    if (optind >= argc)
+    {
         fprintf(stderr, "Missing trace file.\n");
         print_usage();
         return EXIT_FAILURE;
@@ -484,14 +746,29 @@ int main(int argc, char *argv[]) {
 
     tracefile = argv[optind];
 
-    if (!n_flag || !a_flag || strcmp(algorithm, "nru") == 0 && !r_flag) {
+    if (!n_flag || !a_flag || strcmp(algorithm, "nru") == 0 && !r_flag)
+    {
         fprintf(stderr, "Missing required arguments.\n");
         print_usage();
         return EXIT_FAILURE;
     }
 
+    if (strcmp(algorithm, "opt") == 0)
+    {
+        FILE *f = fopen(tracefile, "r");
+        if (f == NULL)
+        {
+            perror("Failed to open trace file");
+            return EXIT_FAILURE;
+        }
+
+        init_opt_list(&opt_list, f);
+        fclose(f);
+    }
+
     FILE *f = fopen(tracefile, "r");
-    if (f == NULL) {
+    if (f == NULL)
+    {
         perror("Failed to open trace file");
         return EXIT_FAILURE;
     }
@@ -499,6 +776,8 @@ int main(int argc, char *argv[]) {
     process_trace_file(f);
     print_stats(algorithm);
     fclose(f);
+
+    free_all(opt_list);
 
     return 0;
 }
