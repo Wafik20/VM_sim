@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define PAGE_SIZE 2048        // 2kb page size
 #define ADDRESS_SIZE 32       // 32 bit virtual address
@@ -10,6 +11,11 @@
 int num_of_frames = 0; // This will be set from command line
 char *algorithm = NULL;
 int refresh_rate = 0;
+
+// Stats
+static int page_faults = 0;
+static int writes = 0;
+static int total_accesses = 0;
 
 static int frames_allocated = 0;
 
@@ -31,7 +37,8 @@ struct tuple
 // Define the doubly circular linked list node
 struct node
 {
-    struct page_table_entry entry;
+    int ref;
+    int page_number;
     struct node *next;
     struct node *prev;
 };
@@ -43,7 +50,7 @@ struct page_list
 };
 
 // Function to create a new node
-struct node *create_node(int valid, int ref, int dirty)
+struct node *create_node(int ref, int page_number)
 {
     struct node *new_node = (struct node *)malloc(sizeof(struct node));
     if (new_node == NULL)
@@ -51,9 +58,10 @@ struct node *create_node(int valid, int ref, int dirty)
         perror("Unable to allocate memory for new node");
         exit(EXIT_FAILURE);
     }
-    new_node->entry.valid = valid;
-    new_node->entry.ref = ref;
-    new_node->entry.dirty = dirty;
+
+    new_node->ref = ref;
+    new_node->page_number = page_number;
+
     new_node->next = new_node; // Points to itself, circular by default
     new_node->prev = new_node; // Points to itself, circular by default
     return new_node;
@@ -91,7 +99,7 @@ void display_list(struct page_list *list)
     struct node *temp = list->head;
     do
     {
-        printf("Node - Valid: %d, Ref: %d, Dirty: %d\n", temp->entry.valid, temp->entry.ref, temp->entry.dirty);
+        printf("Page number: %d, ref: %d\n", temp->page_number, temp->ref);
         temp = temp->next;
     } while (temp != list->head);
 }
@@ -234,6 +242,37 @@ int opt()
 
 int clock()
 {
+    printf("Clock algorithm\n");
+    struct node *current = clock_list.head;
+    while (1)
+    {
+        if (current->ref == 0)
+        {
+            int page_to_be_evicted = current->page_number;
+
+            // remove page from clock list
+            if (current->next == current)
+            {
+                clock_list.head = NULL;
+            }
+            else
+            {
+                current->prev->next = current->next;
+                current->next->prev = current->prev;
+                if (clock_list.head == current)
+                {
+                    clock_list.head = current->next;
+                }
+            }
+            return page_to_be_evicted;
+        }
+        else
+        {
+            current->ref = 0;
+            current = current->next;
+        }
+    }
+    return -1;
 }
 
 void process_trace_file(FILE *f)
@@ -250,6 +289,7 @@ void process_trace_file(FILE *f)
     {
         // Sanitize the trace line by line
         struct tuple mem_access = sanitize_trace_line(line);
+        total_accesses++;
 
         // Get the intruction type and address
         char instruction_type = mem_access.instruction_type;
@@ -276,6 +316,12 @@ void process_trace_file(FILE *f)
         if (is_valid == 0)
         {
             printf("Page Fault, allocating frame...\n");
+            page_faults++;
+
+            // Add the frame to clock list
+            struct node *new_node = create_node(1, page_number);
+            insert_node(&clock_list, new_node);
+
             if (frames_allocated < num_of_frames)
             {
                 printf("Frame %d allocated\n", frames_allocated);
@@ -306,6 +352,9 @@ void process_trace_file(FILE *f)
                 {
                     // Clock algorithm
                     to_be_evicted = clock();
+
+                    // Remove the page from the clock list
+
                 }
                 else
                 {
@@ -324,6 +373,15 @@ void process_trace_file(FILE *f)
 
                 // Evict the frame
                 struct page_table_entry *evicted_entry = &page_table[to_be_evicted];
+
+                // If to_be_evicted is dirty, write to disk
+                if (evicted_entry->dirty == 1)
+                {
+                    writes++;
+                    printf("Writing frame %d to disk\n", to_be_evicted);
+                }
+
+                // Clean up the evicted frame
                 evicted_entry->valid = 0;
                 evicted_entry->ref = 0;
                 evicted_entry->dirty = 0;
@@ -347,21 +405,99 @@ void process_trace_file(FILE *f)
     }
 }
 
-int main(int argc, char *argv[])
+void print_stats(char *algorithm)
 {
-    clock_list.head = NULL;
-    if (argc < 4)
-    {
-        perror("Usage: ./vm num_of_frames algorithm refresh_rate");
-        return 1;
+    printf("\n\n\nStats:#######################################################\n");
+    printf("Algorithm: %s\n", algorithm);
+    printf("Number of Frame: %d\n", num_of_frames);
+    printf("Total Accesses: %d\n", total_accesses);
+    printf("Page Faults: %d\n", page_faults);
+    printf("Writes: %d\n", writes);
+}
+
+void print_usage() {
+    printf("Usage: vmsim -n <numframes> -a <opt|clock|nru> [-r <refresh>] <tracefile>\n");
+}
+
+// int main(int argc, char *argv[])
+// {
+//     clock_list.head = NULL;
+
+//     if (argc < 4)
+//     {
+//         perror("Usage: ./vm num_of_frames algorithm refresh_rate");
+//         return 1;
+//     }
+
+//     num_of_frames = atoi(argv[1]);
+//     algorithm = argv[2];
+//     refresh_rate = atoi(argv[3]);
+
+//     FILE *f = fopen("trace.txt", "r");
+//     process_trace_file(f);
+//     print_stats(algorithm);
+//     fclose(f);
+
+//     return 0;
+// }
+
+int main(int argc, char *argv[]) {
+    int opt;
+    extern char *optarg;
+    extern int optind;
+    int n_flag = 0, a_flag = 0, r_flag = 0;
+    char *tracefile = NULL;
+
+    while ((opt = getopt(argc, argv, "n:a:r:")) != -1) {
+        switch (opt) {
+            case 'n':
+                num_of_frames = atoi(optarg);
+                if (num_of_frames <= 0) {
+                    fprintf(stderr, "Invalid number of frames: Must be greater than zero.\n");
+                    return EXIT_FAILURE;
+                }
+                n_flag = 1;
+                break;
+            case 'a':
+                algorithm = optarg;
+                a_flag = 1;
+                break;
+            case 'r':
+                refresh_rate = atoi(optarg);
+                if (refresh_rate <= 0) {
+                    fprintf(stderr, "Invalid refresh rate: Must be greater than zero.\n");
+                    return EXIT_FAILURE;
+                }
+                r_flag = 1;
+                break;
+            case '?':
+                print_usage();
+                return EXIT_FAILURE;
+        }
     }
 
-    num_of_frames = atoi(argv[1]);
-    algorithm = argv[2];
-    refresh_rate = atoi(argv[3]);
+    if (optind >= argc) {
+        fprintf(stderr, "Missing trace file.\n");
+        print_usage();
+        return EXIT_FAILURE;
+    }
 
-    FILE *f = fopen("trace.txt", "r");
+    tracefile = argv[optind];
+
+    if (!n_flag || !a_flag || strcmp(algorithm, "nru") == 0 && !r_flag) {
+        fprintf(stderr, "Missing required arguments.\n");
+        print_usage();
+        return EXIT_FAILURE;
+    }
+
+    FILE *f = fopen(tracefile, "r");
+    if (f == NULL) {
+        perror("Failed to open trace file");
+        return EXIT_FAILURE;
+    }
+
     process_trace_file(f);
+    print_stats(algorithm);
     fclose(f);
 
     return 0;
