@@ -1,3 +1,6 @@
+/* VM Simulation by Wafik Tawfik @ Apr 23 2024 */
+/* This program simulates a virtual memory system using different page replacement algorithms: OPT, NRU, CLOCK */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,7 +11,7 @@
 #define TABLE_ENTRIES 2097152 // 2^21 pages
 #define INT_MAX 2147483647
 
-// Global variables
+// Global variable
 int num_of_frames = 0; // This will be set from command line
 char *algorithm = NULL;
 int refresh_rate = 0;
@@ -306,6 +309,7 @@ struct node *create_node(int ref, int page_number)
 // Function to insert a node at the end of the list
 void insert_node(struct page_list *list, struct node *new_node)
 {
+    //printf("Inserting node with page number: %d\n", new_node->page_number);
     if (list->head == NULL)
     {
         // List is empty
@@ -333,21 +337,28 @@ void remove_node(struct page_list *list, struct node *node_to_remove)
         return;
     }
 
+    //printf("Removing node with page number: %d\n", node_to_remove->page_number);
+    
+    // Handle single node scenario
     if (node_to_remove->next == node_to_remove)
-    { // Only one node in the list
+    {
         list->head = NULL;
     }
     else
     {
+        // Update the next and prev pointers of the adjacent nodes
         node_to_remove->prev->next = node_to_remove->next;
         node_to_remove->next->prev = node_to_remove->prev;
+
+        // Update head if necessary
         if (list->head == node_to_remove)
         {
-            list->head = node_to_remove->next; // Update head if necessary
+            list->head = node_to_remove->next;
         }
     }
 
-    free(node_to_remove); // Free the memory allocated for the node
+    // Free the removed node
+    free(node_to_remove);
 }
 
 // Function to display the list
@@ -361,15 +372,20 @@ void display_list(struct page_list *list)
     struct node *temp = list->head;
     do
     {
-        printf("[[Page number: %d, ref: %d]] -> ", temp->page_number, temp->ref);
+        // if the node is head, print showing head
+        // if (temp == list->head)
+        // {
+        //     printf("#H#");
+        // }
+        //printf("[[Page number: %d, ref: %d]] -> ", temp->page_number, temp->ref);
         temp = temp->next;
     } while (temp != list->head);
-    printf("\n");
+    //printf("\n");
 }
 
 // Declare a list for the clock algorithm
 struct page_list clock_list;
-struct page_list_opt *opt_list = NULL;
+struct page_list_opt *opt_list;
 
 // end implementation
 
@@ -484,7 +500,7 @@ int nru(int line_num)
 int opt(int line_num)
 {
     int furthest_page = get_page_with_furthest_next_use(opt_list, line_num);
-    //printf("furthest page from line %d: %d\n", line_num, furthest_page);
+    // printf("furthest page from line %d: %d\n", line_num, furthest_page);
     if (furthest_page == -1)
     {
         perror("Failed to find a page with furthest next use");
@@ -502,8 +518,10 @@ int clock()
         if (current->ref == 0)
         {
             int page_to_be_evicted = current->page_number;
+
             // Remove the page from the list
             remove_node(&clock_list, current);
+
             return page_to_be_evicted;
         }
         else
@@ -642,9 +660,7 @@ void process_trace_file(FILE *f)
                 if (strcmp(algorithm, "clock") == 0)
                 {
                     struct node *new_node = create_node(1, page_number);
-                    // printf("node created with page number: %d, ref bit: %d\n", new_node->page_number, new_node->ref);
                     insert_node(&clock_list, new_node);
-                    // display_list(&clock_list);
                 }
             }
             else /* If there is not anyframe available, then we have to evict an existing frame */
@@ -666,7 +682,7 @@ void process_trace_file(FILE *f)
                         perror("Optimal algorithm failed to find a frame to evict");
                         return;
                     }
-                    //printf("opt returned page: %d\n", to_be_evicted);
+                    // printf("opt returned page: %d\n", to_be_evicted);
                 }
                 else if (strcmp(algorithm, "nru") == 0)
                 {
@@ -674,6 +690,7 @@ void process_trace_file(FILE *f)
                 }
                 else if (strcmp(algorithm, "clock") == 0)
                 {
+                    display_list(&clock_list);
                     to_be_evicted = clock();
                 }
                 else
@@ -683,7 +700,7 @@ void process_trace_file(FILE *f)
                 }
 
                 // Evict the frame
-                //printf("Evicting page: %d\n", to_be_evicted);
+                // printf("Evicting page: %d\n", to_be_evicted);
                 struct page_table_entry *evicted_entry = &page_table[to_be_evicted];
 
                 // Evict the frame
@@ -722,7 +739,7 @@ void process_trace_file(FILE *f)
                 // Add the new page to the clock list
                 if (strcmp(algorithm, "clock") == 0)
                 {
-                    struct node *new_node = create_node(1, evicted_page_number);
+                    struct node *new_node = create_node(1, page_number);
                     insert_node(&clock_list, new_node);
                 }
             }
@@ -772,6 +789,7 @@ int main(int argc, char *argv[])
     int n_flag = 0, a_flag = 0, r_flag = 0;
     char *tracefile = NULL;
     clock_list.head = NULL;
+    opt_list = NULL;
 
     while ((opt = getopt(argc, argv, "n:a:r:")) != -1)
     {
@@ -831,15 +849,15 @@ int main(int argc, char *argv[])
     if (strcmp(algorithm, "opt") == 0)
     {
         init_opt_list(&opt_list, f);
-        // print_opt_list(opt_list);
     }
 
     init_page_table();
     process_trace_file(f);
     print_stats(algorithm);
     fclose(f);
-
     free_all(opt_list);
+    // free_all(&clock_list);
+    //  Free all necessary memory
 
     return 0;
 }
