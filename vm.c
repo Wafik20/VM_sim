@@ -356,43 +356,54 @@ int get_offset(__uint32_t virt_address)
 struct tuple sanitize_trace_line(char *trace_line)
 {
     struct tuple result;
-    result.instruction_type = trace_line[0];
+    if (trace_line[0] == 'M' || trace_line[0] == 'S' || trace_line[0] == 'L' || trace_line[0] == 'I')
+    {
+        result.instruction_type = trace_line[0];
+    }
+    else if (trace_line[1] == 'M' || trace_line[1] == 'S' || trace_line[1] == 'L' || trace_line[1] == 'I')
+    {
+        result.instruction_type = trace_line[1];
+    }
+    else
+    {
+        result.instruction_type = '\0';
+    }
     sscanf(trace_line + 1, "%*c %x", &result.add);
     return result;
 }
 
-void allocate_frame(char instruction_type, __uint32_t address, int page_number, int offset, int *valid, int *ref, int *dirty)
-{
-    // Update the page table entry
-    // set the ref to 1 anyways
-    *ref = 1;
-    // we know valid is 1, or else we wouldn't have allocated.
-    *valid = 1;
-    // set dirty to 0
-    *dirty = 0;
+// void allocate_frame(char instruction_type, __uint32_t address, int page_number, int offset, int *valid, int *ref, int *dirty)
+// {
+//     // Update the page table entry
+//     // set the ref to 1 anyways
+//     *ref = 1;
+//     // we know valid is 1, or else we wouldn't have allocated.
+//     *valid = 1;
+//     // set dirty to 0
+//     *dirty = 0;
 
-    switch (instruction_type)
-    {
-    case 'I':
-        printf("I type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
-        break;
-    case 'L':
-        printf("L type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
-        break;
-    case 'S':
-        printf("S type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
-        // set dirty to 1
-        *dirty = 1;
-        break;
-    case 'M':
-        printf("M type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
-        // set dirty to 1
-        *dirty = 1;
-        break;
-    default:
-        break;
-    }
-}
+//     switch (instruction_type)
+//     {
+//     case 'I':
+//         printf("I type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
+//         break;
+//     case 'L':
+//         printf("L type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
+//         break;
+//     case 'S':
+//         printf("S type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
+//         // set dirty to 1
+//         *dirty = 1;
+//         break;
+//     case 'M':
+//         printf("M type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
+//         // set dirty to 1
+//         *dirty = 1;
+//         break;
+//     default:
+//         break;
+//     }
+// }
 
 int nru(int line_num)
 {
@@ -556,26 +567,32 @@ void process_trace_file(FILE *f)
         char instruction_type = mem_access.instruction_type;
         __uint32_t address = mem_access.add;
 
-        if (instruction_type == 'M')
-        {
-            total_accesses += 2;
-        }
-        else
-        {
-            total_accesses++;
-        } 
-
-        printf("\n\n\n total_access so far: %d\n", total_accesses);
-
         // Compute page number and offset
         int page_number = get_page_number(address);
         int offset = get_offset(address);
+
+        // printf("Line number: %d, Instruction type: %c, Address: 0x%X, Page number: %d, Offset: %d\n", line_num, instruction_type, address, page_number, offset);
 
         // Check that page number is in bounds
         if (page_number >= TABLE_ENTRIES)
         {
             perror("invalid page number");
-            return;
+            continue;
+        }
+
+        // Check instruction is valid, if not go to next line
+        if (instruction_type != 'I' && instruction_type != 'L' && instruction_type != 'S' && instruction_type != 'M')
+        {
+            continue;
+        }
+        else if (instruction_type == 'M')
+        {
+
+            total_accesses += 2;
+        }
+        else
+        {
+            total_accesses++;
         }
 
         // Use proper page entry
@@ -587,7 +604,7 @@ void process_trace_file(FILE *f)
         // if the page is invalid, allocate a frame
         if (is_valid == 0)
         {
-            printf("Page Fault, allocating frame...\n");
+            // printf("Page Fault, allocating frame...\n");
             page_faults++;
 
             // Add the frame to clock list
@@ -596,15 +613,14 @@ void process_trace_file(FILE *f)
 
             if (frames_allocated < num_of_frames)
             {
-                printf("Frame %d allocated\n", frames_allocated);
-                allocate_frame(instruction_type, address, page_number, offset, &entry->valid, &entry->ref, &entry->dirty);
+                // printf("Frame %d allocated\n", frames_allocated);
                 frames_allocated++;
             }
             else
             {
-                printf("No frames available, evicting...\n");
-                // Evict a frame using an algorithm opt, nru, clock.
-                // Each algorithm will take an array of frames and return the frame to be evicted (int).
+                // printf("No frames available, evicting...\n");
+                //  Evict a frame using an algorithm opt, nru, clock.
+                //  Each algorithm will take an array of frames and return the frame to be evicted (int).
                 int to_be_evicted = -1;
                 if (algorithm == NULL)
                 {
@@ -654,7 +670,7 @@ void process_trace_file(FILE *f)
                 if (evicted_entry->dirty == 1)
                 {
                     writes++;
-                    printf("Writing frame %d to disk\n", to_be_evicted);
+                    // printf("Writing frame %d to disk\n", to_be_evicted);
                 }
 
                 // Clean up the evicted frame
@@ -667,13 +683,20 @@ void process_trace_file(FILE *f)
                 int evicted_offset = 0;
 
                 // Allocate the new frame
-                printf("Frame %d allocated\n", to_be_evicted);
-                allocate_frame(instruction_type, address, evicted_page_number, evicted_offset, &evicted_entry->valid, &evicted_entry->ref, &evicted_entry->dirty);
+                // printf("Frame %d allocated\n", to_be_evicted);
             }
+
+            // Allocate frame
+            entry->valid = 1;
+            entry->ref = 1;
+            entry->dirty = instruction_type == 'S' || instruction_type == 'M' ? 1 : 0;
         }
         else
         {
-            printf("Page hit\n");
+            //printf("Page hit!! for intruction type %c, address 0x%X, page number %d, offset %d\n", instruction_type, address, page_number, offset);
+            // Set valid and ref to 1
+            entry->valid = 1;
+            entry->ref = 1;
         }
 
         // increment the line number
