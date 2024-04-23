@@ -260,7 +260,6 @@ void remove_page(struct page_list_opt **root, int page_num)
     // Free the page node itself
     free(current);
 }
-
 // end implementation
 
 // Circular linked list implementation
@@ -319,6 +318,32 @@ void insert_node(struct page_list *list, struct node *new_node)
     }
 }
 
+// Function to remove a node from the list
+void remove_node(struct page_list *list, struct node *node_to_remove)
+{
+    if (list->head == NULL || node_to_remove == NULL)
+    {
+        printf("List is empty or node is null.\n");
+        return;
+    }
+
+    if (node_to_remove->next == node_to_remove)
+    { // Only one node in the list
+        list->head = NULL;
+    }
+    else
+    {
+        node_to_remove->prev->next = node_to_remove->next;
+        node_to_remove->next->prev = node_to_remove->prev;
+        if (list->head == node_to_remove)
+        {
+            list->head = node_to_remove->next; // Update head if necessary
+        }
+    }
+
+    free(node_to_remove); // Free the memory allocated for the node
+}
+
 // Function to display the list
 void display_list(struct page_list *list)
 {
@@ -330,9 +355,10 @@ void display_list(struct page_list *list)
     struct node *temp = list->head;
     do
     {
-        printf("Page number: %d, ref: %d\n", temp->page_number, temp->ref);
+        printf("[[Page number: %d, ref: %d]] -> ", temp->page_number, temp->ref);
         temp = temp->next;
     } while (temp != list->head);
+    printf("\n");
 }
 
 // Declare a list for the clock algorithm
@@ -356,7 +382,10 @@ int get_offset(__uint32_t virt_address)
 struct tuple sanitize_trace_line(char *trace_line)
 {
     struct tuple result;
-    if (trace_line[0] == 'M' || trace_line[0] == 'S' || trace_line[0] == 'L' || trace_line[0] == 'I')
+
+    // If the first byte is an I instruction or the second byte is an S, L, M instruction => the line is valid and can be sanitized
+
+    if (trace_line[0] == 'I')
     {
         result.instruction_type = trace_line[0];
     }
@@ -366,44 +395,12 @@ struct tuple sanitize_trace_line(char *trace_line)
     }
     else
     {
-        result.instruction_type = '\0';
+        result.instruction_type = 'X'; // Invalid instruction
     }
-    sscanf(trace_line + 1, "%*c %x", &result.add);
+
+    sscanf(trace_line + 2, "%*c %x", &result.add);
     return result;
 }
-
-// void allocate_frame(char instruction_type, __uint32_t address, int page_number, int offset, int *valid, int *ref, int *dirty)
-// {
-//     // Update the page table entry
-//     // set the ref to 1 anyways
-//     *ref = 1;
-//     // we know valid is 1, or else we wouldn't have allocated.
-//     *valid = 1;
-//     // set dirty to 0
-//     *dirty = 0;
-
-//     switch (instruction_type)
-//     {
-//     case 'I':
-//         printf("I type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
-//         break;
-//     case 'L':
-//         printf("L type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
-//         break;
-//     case 'S':
-//         printf("S type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
-//         // set dirty to 1
-//         *dirty = 1;
-//         break;
-//     case 'M':
-//         printf("M type: Address: 0x%X, putting in page number %d, with offset %d\n", address, page_number, offset);
-//         // set dirty to 1
-//         *dirty = 1;
-//         break;
-//     default:
-//         break;
-//     }
-// }
 
 int nru(int line_num)
 {
@@ -492,28 +489,14 @@ int opt(int line_num, int page_num)
 
 int clock()
 {
-    printf("Clock algorithm\n");
     struct node *current = clock_list.head;
-    while (1)
+    while (current != NULL)
     {
         if (current->ref == 0)
         {
             int page_to_be_evicted = current->page_number;
-
-            // remove page from clock list
-            if (current->next == current)
-            {
-                clock_list.head = NULL;
-            }
-            else
-            {
-                current->prev->next = current->next;
-                current->next->prev = current->prev;
-                if (clock_list.head == current)
-                {
-                    clock_list.head = current->next;
-                }
-            }
+            // Remove the page from the list
+            remove_node(&clock_list, current);
             return page_to_be_evicted;
         }
         else
@@ -548,6 +531,14 @@ void init_opt_list(struct page_list_opt **opt_list, FILE *trace_file)
     rewind(trace_file);
 }
 
+void allocate_page(char instruction_type, int page_number)
+{
+    struct page_table_entry *entry = &page_table[page_number];
+    entry->valid = 1;
+    entry->ref = 1;
+    entry->dirty = instruction_type == 'S' || instruction_type == 'M' ? 1 : 0;
+}
+
 void process_trace_file(FILE *f)
 {
     if (f == NULL)
@@ -571,21 +562,26 @@ void process_trace_file(FILE *f)
         int page_number = get_page_number(address);
         int offset = get_offset(address);
 
-        // printf("Line number: %d, Instruction type: %c, Address: 0x%X, Page number: %d, Offset: %d\n", line_num, instruction_type, address, page_number, offset);
-
-        // Check that page number is in bounds
-        if (page_number >= TABLE_ENTRIES)
+        // Check that page number is in bounds, and that the instruction type is valid
+        if (page_number < 0 || page_number >= TABLE_ENTRIES || instruction_type == 'X')
         {
-            perror("invalid page number");
+            if (page_number < 0)
+            {
+                perror("skipping line: negative page number.\n");
+            }
+
+            if (page_number >= TABLE_ENTRIES)
+            {
+                perror("skipping line: page number out of bounds.\n");
+            }
+
+            if (instruction_type == 'X')
+            {
+                perror("skipping line: invalid instruction type.\n");
+            }
             continue;
         }
-
-        // Check instruction is valid, if not go to next line
-        if (instruction_type != 'I' && instruction_type != 'L' && instruction_type != 'S' && instruction_type != 'M')
-        {
-            continue;
-        }
-        else if (instruction_type == 'M')
+        else if (instruction_type == 'M') /* Modify counts as two mem accesses */
         {
 
             total_accesses += 2;
@@ -595,33 +591,38 @@ void process_trace_file(FILE *f)
             total_accesses++;
         }
 
-        // Use proper page entry
+        // Find page table entry
         struct page_table_entry *entry = &page_table[page_number];
+
+        // Get the current state of the page
         int is_valid = entry->valid;
         int is_referenced = entry->ref;
         int is_dirty = entry->dirty;
 
         // if the page is invalid, allocate a frame
-        if (is_valid == 0)
+        if (!is_valid)
         {
-            // printf("Page Fault, allocating frame...\n");
-            page_faults++;
-
-            // Add the frame to clock list
-            struct node *new_node = create_node(1, page_number);
-            insert_node(&clock_list, new_node);
-
-            if (frames_allocated < num_of_frames)
+            page_faults++;                        /* Accessing an invalid page causes a page fault */
+            if (frames_allocated < num_of_frames) /* If there is a free frame, allocate the page in that frame */
             {
-                // printf("Frame %d allocated\n", frames_allocated);
+                // Allocate the page
+                allocate_page(instruction_type, page_number);
                 frames_allocated++;
+
+                // Add page to the clock list if the algorithm is clock
+                if (strcmp(algorithm, "clock") == 0)
+                {
+                    struct node *new_node = create_node(1, page_number);
+                    //printf("node created with page number: %d, ref bit: %d\n", new_node->page_number, new_node->ref);
+                    insert_node(&clock_list, new_node);
+                    //display_list(&clock_list);
+                }
             }
-            else
+            else /* If there is not anyframe available, then we have to evict an existing frame */
             {
                 // printf("No frames available, evicting...\n");
                 //  Evict a frame using an algorithm opt, nru, clock.
-                //  Each algorithm will take an array of frames and return the frame to be evicted (int).
-                int to_be_evicted = -1;
+                int to_be_evicted = -1; /* Page number to be evicted */
                 if (algorithm == NULL)
                 {
                     perror("No algorithm specified");
@@ -645,8 +646,9 @@ void process_trace_file(FILE *f)
                 {
                     // Clock algorithm
                     to_be_evicted = clock();
-
-                    // Remove the page from the clock list
+                    // Print list after evicting using the clock algorithm
+                    //printf("List after evicting using the clock algorithm:::::::::::::\n");
+                    //display_list(&clock_list);
                 }
                 else
                 {
@@ -655,22 +657,22 @@ void process_trace_file(FILE *f)
                 }
 
                 // Evict the frame
-                if (to_be_evicted < 0)
+                struct page_table_entry *evicted_entry = &page_table[to_be_evicted];
+
+                // Evict the frame
+                if (to_be_evicted < 0) /* If the evicted page is not a positive int, then we're doing smth wrong */
                 {
-                    perror("Optimal algorithm failed to find a frame to evict");
+                    perror("Invalid page number to be evicted.\nTerminating");
+                    printf("to_be_evicted: %d\n", to_be_evicted);
                     return;
                 }
 
-                printf("Frame %d evicted\n", to_be_evicted);
-
-                // Evict the frame
-                struct page_table_entry *evicted_entry = &page_table[to_be_evicted];
+                int is_dirty = evicted_entry->dirty;
 
                 // If to_be_evicted is dirty, write to disk
-                if (evicted_entry->dirty == 1)
+                if (is_dirty)
                 {
                     writes++;
-                    // printf("Writing frame %d to disk\n", to_be_evicted);
                 }
 
                 // Clean up the evicted frame
@@ -682,20 +684,22 @@ void process_trace_file(FILE *f)
                 int evicted_page_number = to_be_evicted;
                 int evicted_offset = 0;
 
-                // Allocate the new frame
-                // printf("Frame %d allocated\n", to_be_evicted);
-            }
+                // Allocate the new page
+                allocate_page(instruction_type, evicted_page_number);
 
-            // Allocate frame
-            entry->valid = 1;
-            entry->ref = 1;
-            entry->dirty = instruction_type == 'S' || instruction_type == 'M' ? 1 : 0;
+                // Add the new page to the clock list
+                if (strcmp(algorithm, "clock") == 0)
+                {
+                    struct node *new_node = create_node(1, evicted_page_number);
+                    insert_node(&clock_list, new_node);
+                    //display_list(&clock_list);
+                }
+            }
         }
         else
         {
-            //printf("Page hit!! for intruction type %c, address 0x%X, page number %d, offset %d\n", instruction_type, address, page_number, offset);
-            // Set valid and ref to 1
-            entry->valid = 1;
+            // PAGE HIT!
+            // Set the ref bit to 1 (unneccessary, but doesn't hurt)
             entry->ref = 1;
         }
 
@@ -717,6 +721,16 @@ void print_stats(char *algorithm)
 void print_usage()
 {
     printf("Usage: vmsim -n <numframes> -a <opt|clock|nru> [-r <refresh>] <tracefile>\n");
+}
+
+void init_page_table()
+{
+    for (int i = 0; i < TABLE_ENTRIES; i++)
+    {
+        page_table[i].valid = 0;
+        page_table[i].ref = 0;
+        page_table[i].dirty = 0;
+    }
 }
 
 int main(int argc, char *argv[])
@@ -796,6 +810,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    init_page_table();
     process_trace_file(f);
     print_stats(algorithm);
     fclose(f);
