@@ -158,14 +158,15 @@ void print_opt_list(struct page_list_opt *root)
 
     while (current != NULL)
     {
-        printf("Page number: %d\n", current->page_num);
+        printf("Page number: %d:", current->page_num);
         struct access *acc = current->head;
         while (acc != NULL)
         {
-            printf("Line number: %d\n", acc->line_num);
+            printf("[[Line number: %d]] -> ", acc->line_num);
             acc = acc->next;
         }
         current = current->next;
+        printf("\n");
     }
 }
 
@@ -194,27 +195,32 @@ int get_closest_use_of_page(int page_num, int curr_line_num, struct page_list_op
     return closest == INT_MAX ? -1 : closest; // If no access is closer, return -1 or another indicator
 }
 
-// Function to get the page with the farthest first future use
-int get_page_with_farthest_next_use(struct page_list_opt *root, int line_num)
+// Function to get the page with the furthest first future use
+int get_page_with_furthest_next_use(struct page_list_opt *root, int line_num)
 {
     struct page_list_opt *current = root;
-    int farthest = -1;      // Initialize to -1 to indicate no future use has been found yet
-    int farthest_page = -1; // This will store the page number with the farthest future use
+    int max = -1;      // Initialize to -1 to indicate no future use has been found yet
+    int max_page = -1; // This will store the page number with the furthest future use
 
     while (current != NULL)
     {
-        int first_future_use = get_closest_use_of_page(current->page_num, line_num, root);
-        if (first_future_use > farthest)
+        int closest_future_use = get_closest_use_of_page(current->page_num, line_num, root); /* Get the next future use of this page after line line_num */
+        if (closest_future_use == -1)
+        { /* if the page isn't used in the future, then it's the perfect candidate. Return it. */
+            return current->page_num;
+        }
+
+        // printf("Page number: %d, closest future use after line %d: %d\n", current->page_num, line_num, closest_future_use);
+        if (closest_future_use > max) /* If it's furthest than the midn */
         {
-            farthest = first_future_use;
-            farthest_page = current->page_num;
+            max = closest_future_use;
+            max_page = current->page_num;
         }
         current = current->next;
     }
 
-    return farthest_page; // Return the page number with the farthest future use, or -1 if none is found
+    return max_page; // Return the page number with the furthest future use, or -1 if none is found
 }
-
 // remove a page from the list
 void remove_page(struct page_list_opt **root, int page_num)
 {
@@ -475,16 +481,17 @@ int nru(int line_num)
     return -1;
 }
 
-int opt(int line_num, int page_num)
+int opt(int line_num)
 {
-    int farthest_page = get_page_with_farthest_next_use(opt_list, line_num);
-    if (farthest_page == -1)
+    int furthest_page = get_page_with_furthest_next_use(opt_list, line_num);
+    //printf("furthest page from line %d: %d\n", line_num, furthest_page);
+    if (furthest_page == -1)
     {
-        perror("Failed to find a page with farthest next use");
+        perror("Failed to find a page with furthest next use");
         return -1;
     }
 
-    return farthest_page;
+    return furthest_page;
 }
 
 int clock()
@@ -512,6 +519,7 @@ void init_opt_list(struct page_list_opt **opt_list, FILE *trace_file)
 {
     char line[128];
     int line_num = 0;
+    printf("Initializing opt list...\n");
     struct page_list_opt *page_node;
 
     // Read each line from the trace file
@@ -520,15 +528,36 @@ void init_opt_list(struct page_list_opt **opt_list, FILE *trace_file)
         struct tuple mem_access = sanitize_trace_line(line);
         int page_number = get_page_number(mem_access.add);
 
+        // if the mem access is invalid, skip it
+        if (page_number < 0 || page_number >= TABLE_ENTRIES || mem_access.instruction_type == 'X')
+        {
+            if (page_number < 0)
+            {
+                perror("skipping line: negative page number.\n");
+            }
+
+            if (page_number >= TABLE_ENTRIES)
+            {
+                perror("skipping line: page number out of bounds.\n");
+            }
+
+            if (mem_access.instruction_type == 'X')
+            {
+                perror("skipping line: invalid instruction type.\n");
+            }
+            continue;
+        }
+
         // Find or create a new page list node for the current page number
         page_node = find_or_add_page(opt_list, page_number);
         add_access(page_node, line_num);
 
         line_num++; // Increment line number for the next read
     }
-
     // Reset the file pointer to the beginning of the file for future use
     rewind(trace_file);
+
+    printf("Opt list initialized succesfully.\n");
 }
 
 void allocate_page(char instruction_type, int page_number)
@@ -613,9 +642,9 @@ void process_trace_file(FILE *f)
                 if (strcmp(algorithm, "clock") == 0)
                 {
                     struct node *new_node = create_node(1, page_number);
-                    //printf("node created with page number: %d, ref bit: %d\n", new_node->page_number, new_node->ref);
+                    // printf("node created with page number: %d, ref bit: %d\n", new_node->page_number, new_node->ref);
                     insert_node(&clock_list, new_node);
-                    //display_list(&clock_list);
+                    // display_list(&clock_list);
                 }
             }
             else /* If there is not anyframe available, then we have to evict an existing frame */
@@ -631,12 +660,13 @@ void process_trace_file(FILE *f)
                 if (strcmp(algorithm, "opt") == 0)
                 {
                     // Optimal algorithm
-                    to_be_evicted = opt(line_num, page_number);
+                    to_be_evicted = opt(line_num);
                     if (to_be_evicted == -1)
                     {
                         perror("Optimal algorithm failed to find a frame to evict");
                         return;
                     }
+                    //printf("opt returned page: %d\n", to_be_evicted);
                 }
                 else if (strcmp(algorithm, "nru") == 0)
                 {
@@ -644,11 +674,7 @@ void process_trace_file(FILE *f)
                 }
                 else if (strcmp(algorithm, "clock") == 0)
                 {
-                    // Clock algorithm
                     to_be_evicted = clock();
-                    // Print list after evicting using the clock algorithm
-                    //printf("List after evicting using the clock algorithm:::::::::::::\n");
-                    //display_list(&clock_list);
                 }
                 else
                 {
@@ -657,6 +683,7 @@ void process_trace_file(FILE *f)
                 }
 
                 // Evict the frame
+                //printf("Evicting page: %d\n", to_be_evicted);
                 struct page_table_entry *evicted_entry = &page_table[to_be_evicted];
 
                 // Evict the frame
@@ -665,6 +692,11 @@ void process_trace_file(FILE *f)
                     perror("Invalid page number to be evicted.\nTerminating");
                     printf("to_be_evicted: %d\n", to_be_evicted);
                     return;
+                }
+
+                if (strcmp(algorithm, "opt") == 0) /* if a page is evicted remove it from the opt list */
+                {
+                    remove_page(&opt_list, to_be_evicted);
                 }
 
                 int is_dirty = evicted_entry->dirty;
@@ -692,7 +724,6 @@ void process_trace_file(FILE *f)
                 {
                     struct node *new_node = create_node(1, evicted_page_number);
                     insert_node(&clock_list, new_node);
-                    //display_list(&clock_list);
                 }
             }
         }
@@ -790,24 +821,17 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if (strcmp(algorithm, "opt") == 0)
-    {
-        FILE *f = fopen(tracefile, "r");
-        if (f == NULL)
-        {
-            perror("Failed to open trace file");
-            return EXIT_FAILURE;
-        }
-
-        init_opt_list(&opt_list, f);
-        fclose(f);
-    }
-
     FILE *f = fopen(tracefile, "r");
+
     if (f == NULL)
     {
         perror("Failed to open trace file");
         return EXIT_FAILURE;
+    }
+    if (strcmp(algorithm, "opt") == 0)
+    {
+        init_opt_list(&opt_list, f);
+        // print_opt_list(opt_list);
     }
 
     init_page_table();
