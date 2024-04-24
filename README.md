@@ -54,5 +54,4 @@ Thanks to everyone who has contributed to this project and those who have provid
 Wafik Tawfik
 
 ## Contact Information
-For more information, please contact Wafik Tawfik at `wafik.tawfik@example.com`.
-```
+For more information, please contact Wafik Tawfik at `wafik.wt@gmail.com`.
