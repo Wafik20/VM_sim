@@ -47,11 +47,5 @@ Contributions to the VM Simulation project are welcome. Please ensure to follow 
 ## License
 This project is licensed under the MIT License - see the LICENSE.md file for details.
 
-## Acknowledgments
-Thanks to everyone who has contributed to this project and those who have provided valuable feedback and suggestions.
-
-## Author
-Wafik Tawfik
-
 ## Contact Information
 For more information, please contact Wafik Tawfik at `wafik.wt@gmail.com`.
