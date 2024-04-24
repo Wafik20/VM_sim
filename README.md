@@ -1,7 +1,7 @@
 # VM Simulation
 
 ## Description
-VM Simulation is a C program developed by Wafik Tawfik to simulate a virtual memory system using various page replacement algorithms, including OPT, NRU, and CLOCK. The program handles memory management tasks such as page allocation, replacement, and tracking access statistics, providing a platform for understanding and analyzing the efficiency of different algorithms in handling page faults.
+VM Simulation is a C program to simulate a virtual memory system using various page replacement algorithms, including OPT, NRU, and CLOCK. The program handles memory management tasks such as page allocation, replacement, and tracking access statistics, providing a platform for understanding and analyzing the efficiency of different algorithms in handling page faults.
 
 ## Features
 - Simulates virtual memory management.
