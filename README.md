@@ -1,4 +1,3 @@
-```
 # VM Simulation
 
 ## Description
