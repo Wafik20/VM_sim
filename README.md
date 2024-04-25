@@ -40,12 +40,3 @@ L 04f6b869
 
 ## Output
 The program outputs statistics to the standard output, detailing the number of total accesses, page faults, and disk writes. It also prints any errors or important warnings during the execution.
-
-## Contributing
-Contributions to the VM Simulation project are welcome. Please ensure to follow the existing code style and add comments where necessary.
-
-## License
-This project is licensed under the MIT License - see the LICENSE.md file for details.
-
-## Contact Information
-For more information, please contact Wafik Tawfik at `wafik.wt@gmail.com`.
